@@ -1,0 +1,19 @@
+# Зависимости разработки
+node_modules/
+package-lock.json
+
+# Мусор ОС и редакторов
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Локальные файлы разработки
+.ai/
+.claude/
+.mcp.json
+.serena/
+CLAUDE.md
+docs/
+deploy.sh
