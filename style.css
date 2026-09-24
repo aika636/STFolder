@@ -574,3 +574,52 @@
     margin: 0;
     padding: 2px 8px;
 }
+
+/* --- Замочек «Вид папки» --- */
+
+.stf-settings .stf-lock {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: -4px 0 10px;
+    padding: 3px 8px;
+    border: 1px solid var(--stf-line);
+    border-radius: 12px;
+    background: var(--stf-surface);
+    font-size: 0.8em;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    opacity: 0.75;
+}
+
+.stf-settings .stf-lock[aria-checked="true"] {
+    border-color: var(--stf-accent);
+    opacity: 1;
+}
+
+.stf-settings .stf-lock:focus-visible {
+    outline: 2px solid var(--stf-accent);
+    outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .stf-settings .stf-lock:hover {
+        opacity: 1;
+    }
+}
+
+/* Закреплено: плитки и ползунок видны, но приглушены и не нажимаются. */
+.stf-settings .stf-picker[aria-disabled="true"] .stf-tile {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.stf-settings .stf-picker[aria-disabled="true"] .stf-tile[aria-checked="true"] {
+    opacity: 0.9;
+}
+
+.stf-settings .stf-size-row input[type="range"]:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}

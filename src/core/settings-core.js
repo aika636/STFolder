@@ -19,6 +19,7 @@ export const SETTINGS_VERSION = 1;
 //   style      — стиль папки (id из STYLES)
 //   size       — диаметр папки в px (SIZE_LIMITS)
 //   order      — ключи кнопок в порядке показа в папке
+//   lookLocked — «Вид папки» закреплён: иконку, стиль и размер не поменять случайно
 export const DEFAULTS = Object.freeze({
     version: SETTINGS_VERSION,
     enabled: true,
@@ -30,6 +31,7 @@ export const DEFAULTS = Object.freeze({
     style: DEFAULT_STYLE,
     size: FOLDER_SIZE,
     order: [],
+    lookLocked: false,
 });
 
 export function isPlainObject(value) {
@@ -62,6 +64,7 @@ const VALIDATORS = Object.freeze({
     style: (v) => STYLE_IDS.includes(v),
     size: (v) => Number.isInteger(v) && v >= SIZE_LIMITS.min && v <= SIZE_LIMITS.max,
     order: isStringArray,
+    lookLocked: (v) => typeof v === 'boolean',
 });
 
 // --- Записи о кнопках ---

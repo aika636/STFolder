@@ -172,4 +172,10 @@ test('выбранная раньше палочка превращается в
     assertEqual(getOrCreateSettings({ STFolder: { icon: 'wand' } }).icon, 'sparkles');
 });
 
+test('lookLocked: по умолчанию выкл, не-boolean → выкл, true сохраняется', () => {
+    assertEqual(getOrCreateSettings({}).lookLocked, false);
+    assertEqual(getOrCreateSettings({ STFolder: { lookLocked: 'да' } }).lookLocked, false);
+    assertEqual(getOrCreateSettings({ STFolder: { lookLocked: true } }).lookLocked, true);
+});
+
 report('settings-core');

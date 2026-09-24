@@ -73,9 +73,13 @@ export function renderLookSettings(container) {
     const settings = getSettings();
 
     const redraw = () => renderLookSettings(container);
+    // Закреплённый вид: плитки и ползунок видны, но не реагируют — от случайного свайпа
+    // по ползунку на телефоне.
+    const locked = settings.lookLocked;
+    container.classList.toggle('stf-look-locked', locked);
 
     container.appendChild(subtitle('Иконка'));
-    container.appendChild(picker('Иконка папки', ICONS, settings.icon, (icon) => preview(icon, settings.style), (id) => {
+    container.appendChild(picker('Иконка папки', ICONS, settings.icon, locked, (icon) => preview(icon, settings.style), (id) => {
         settings.icon = id;
         saveSettings();
         refreshFolder();
@@ -84,7 +88,7 @@ export function renderLookSettings(container) {
 
     const currentIcon = findIcon(settings.icon);
     container.appendChild(subtitle('Стиль'));
-    container.appendChild(picker('Стиль папки', STYLES, settings.style, (style) => preview(currentIcon, style.id), (id) => {
+    container.appendChild(picker('Стиль папки', STYLES, settings.style, locked, (style) => preview(currentIcon, style.id), (id) => {
         settings.style = id;
         saveSettings();
         refreshFolder();
@@ -92,7 +96,8 @@ export function renderLookSettings(container) {
     }));
 
     container.appendChild(subtitle('Размер'));
-    container.appendChild(sizeSlider(settings));
+    container.appendChild(sizeSlider(settings, locked));
+    container.appendChild(lockToggle(settings, redraw));
 
     const hint = document.createElement('small');
     hint.className = 'stf-settings-hint';
@@ -112,8 +117,42 @@ export function renderLookSettings(container) {
     container.appendChild(actions);
 }
 
+// Замочек под ползунком: закрепить/открепить весь «Вид папки».
+function lockToggle(settings, redraw) {
+    const button = document.createElement('div');
+    button.className = 'stf-lock';
+    button.setAttribute('role', 'switch');
+    button.setAttribute('tabindex', '0');
+    button.setAttribute('aria-checked', String(settings.lookLocked));
+    button.title = settings.lookLocked
+        ? 'Вид папки закреплён — нажмите, чтобы менять'
+        : 'Закрепить вид папки, чтобы не поменять его случайно';
+
+    const icon = document.createElement('i');
+    icon.className = `fa-solid ${settings.lookLocked ? 'fa-lock' : 'fa-lock-open'}`;
+    const text = document.createElement('span');
+    text.textContent = settings.lookLocked ? 'Вид закреплён' : 'Закрепить вид';
+    button.append(icon, text);
+
+    const toggle = () => {
+        settings.lookLocked = !settings.lookLocked;
+        saveSettings();
+        redraw();
+        // После перерисовки — вернуть фокус на новый замочек (клавиатура на ПК).
+        requestAnimationFrame(() => document.querySelector('.stf-lock')?.focus({ preventScroll: true }));
+    };
+    button.addEventListener('click', toggle);
+    button.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+        }
+    });
+    return button;
+}
+
 // Ползунок размера папки: папка меняется на лету, в настройки пишем по отпусканию.
-function sizeSlider(settings) {
+function sizeSlider(settings, locked = false) {
     const row = document.createElement('div');
     row.className = 'stf-size-row';
 
@@ -124,6 +163,7 @@ function sizeSlider(settings) {
     input.step = String(SIZE_LIMITS.step);
     input.value = String(settings.size);
     input.setAttribute('aria-label', 'Размер папки');
+    input.disabled = locked;
 
     const value = document.createElement('span');
     value.className = 'stf-size-value';
@@ -141,11 +181,16 @@ function sizeSlider(settings) {
 }
 
 // Группа плиток-радиокнопок. Стрелки перемещают выбор, как у обычной radiogroup.
-function picker(label, items, selectedId, renderPreview, onSelect) {
+function picker(label, items, selectedId, locked, renderPreview, onSelect) {
     const group = document.createElement('div');
     group.className = 'stf-picker';
     group.setAttribute('role', 'radiogroup');
     group.setAttribute('aria-label', label);
+    if (locked) {
+        group.setAttribute('aria-disabled', 'true');
+        // Закреплено — выбор не меняется ни кликом, ни стрелками.
+        onSelect = () => {};
+    }
 
     items.forEach((item, index) => {
         const tile = document.createElement('div');
