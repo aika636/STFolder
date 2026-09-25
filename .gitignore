@@ -17,3 +17,4 @@ Thumbs.db
 CLAUDE.md
 docs/
 deploy.sh
+.playwright-mcp/

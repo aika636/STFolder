@@ -13,6 +13,9 @@ import { logError } from '../log.js';
 import { OWN_ATTR, rescanNow, withNaturalState, withoutObserving } from './detector.js';
 
 const REFRESH_DEBOUNCE_MS = 120;
+// Холст перерисовывается без мутаций DOM — такие копии обновляем по таймеру, пока папка
+// открыта (кольцевые таймеры, прогресс).
+const CANVAS_REFRESH_MS = 500;
 // pointerId для синтетических pointer-событий: не пересекается с настоящими (0, 1, 2…).
 const SYNTH_POINTER_ID = 7331;
 
@@ -35,25 +38,64 @@ function stripClone(node) {
     }
 }
 
-// Снимок оригинала: глубокая копия, на каждый узел — его вычисленные стили.
+// Псевдоэлементы (::before/::after) копия теряет вместе с классами и id — а на них
+// часто держатся значки и бейджи. Переносим их вычисленные стили правилом по
+// data-атрибуту узла копии; правило живёт в <style> внутри ячейки.
+const PSEUDOS = ['::before', '::after'];
+let pseudoSeq = 0;
+
+function copyPseudoRules(orig, copy) {
+    const rules = [];
+    for (const pseudo of PSEUDOS) {
+        const cs = getComputedStyle(orig, pseudo);
+        const content = cs.getPropertyValue('content');
+        if (!content || content === 'none' || content === 'normal') continue;
+        if (!copy.dataset.stfPseudo) copy.dataset.stfPseudo = String(++pseudoSeq);
+        const decls = ['content', ...COPY_STYLE_PROPS, ...COPY_CHILD_EXTRA_PROPS]
+            .map((prop) => `${prop}: ${cs.getPropertyValue(prop)} !important;`)
+            .join(' ');
+        rules.push(`[data-stf-pseudo="${copy.dataset.stfPseudo}"]${pseudo} { ${decls} }`);
+    }
+    return rules;
+}
+
+// <canvas> cloneNode копирует пустым — кольцевые таймеры и прогресс-бары рисуют именно
+// на нём. Переносим текущий кадр.
+function copyCanvas(orig, copy) {
+    if (!(orig instanceof HTMLCanvasElement) || !(copy instanceof HTMLCanvasElement)) return;
+    try {
+        copy.width = orig.width;
+        copy.height = orig.height;
+        copy.getContext('2d')?.drawImage(orig, 0, 0);
+    } catch {
+        // холст без 2d-контекста (WebGL) — останется пустым
+    }
+}
+
+// Снимок оригинала: глубокая копия, на каждый узел — его вычисленные стили, кадр
+// холста и псевдоэлементы. Возвращает { clone, css }.
 function snapshot(el) {
     return withNaturalState(el, () => {
         const clone = el.cloneNode(true);
         const originals = [el, ...el.querySelectorAll('*')];
         const copies = [clone, ...clone.querySelectorAll('*')];
+        const rules = [];
 
         originals.forEach((orig, i) => {
             const copy = copies[i];
             if (!copy) return;
             copy.removeAttribute('style');
             copyStyles(orig, copy, i === 0 ? COPY_STYLE_PROPS : [...COPY_STYLE_PROPS, ...COPY_CHILD_EXTRA_PROPS]);
+            copyCanvas(orig, copy);
+            rules.push(...copyPseudoRules(orig, copy));
             stripClone(copy);
         });
 
-        // Классы корня снимаем: его внешность уже перенесена инлайном, а правила
-        // расширения для этих классов (`.my-fab { position: fixed !important; … }`)
-        // унесли бы копию из ячейки. У потомков классы остаются — на них держатся
-        // иконки (FA рисует глиф через ::before по классу).
+        // Классы корня снимаем: правила расширения для них (`.my-fab { position: fixed
+        // !important; … }`) унесли бы копию из ячейки, а чужой код, ищущий кнопку по
+        // классу, нашёл бы копию вместо оригинала. Внешность корня уже перенесена
+        // инлайном, псевдоэлементы — правилами выше. У потомков классы остаются —
+        // на них держатся иконки (FA рисует глиф через ::before по классу).
         clone.removeAttribute('class');
 
         // Копия стоит в ячейке и сама событий не ловит — их ловит ячейка.
@@ -61,8 +103,9 @@ function snapshot(el) {
         clone.style.setProperty('inset', 'auto', 'important');
         clone.style.setProperty('margin', '0', 'important');
         clone.style.setProperty('transform', 'none', 'important');
+        clone.style.setProperty('translate', 'none', 'important');
         clone.style.setProperty('pointer-events', 'none', 'important');
-        return clone;
+        return { clone, css: rules.join(' ') };
     });
 }
 
@@ -70,7 +113,14 @@ function refresh(key) {
     const p = proxies.get(key);
     if (!p) return;
     try {
-        p.cell.replaceChildren(snapshot(p.el));
+        const { clone, css } = snapshot(p.el);
+        if (css) {
+            const style = document.createElement('style');
+            style.textContent = css;
+            p.cell.replaceChildren(clone, style);
+        } else {
+            p.cell.replaceChildren(clone);
+        }
     } catch (err) {
         logError(`снимок копии ${key} упал`, err);
     }
@@ -135,7 +185,7 @@ function tapThrough(key, clientX, clientY) {
     const relX = clientX - cellRect.left;
     const relY = clientY - cellRect.top;
 
-    withNaturalState(p.el, () => {
+    withNaturalState(p.el, () => withSyntheticPointerCapture(() => {
         const rect = p.el.getBoundingClientRect();
         const x = rect.left + Math.min(Math.max(relX, 1), Math.max(rect.width - 1, 1));
         const y = rect.top + Math.min(Math.max(relY, 1), Math.max(rect.height - 1, 1));
@@ -148,7 +198,7 @@ function tapThrough(key, clientX, clientY) {
                 logError(`пересылка ${type} на ${key} упала`, err);
             }
         }
-    });
+    }));
 
     // Мутации, которые обработчики расширения сделали внутри withNaturalState, детектор
     // не увидел (withoutObserving) — пересканировать самим. И обновить копию: нажатие
@@ -157,6 +207,51 @@ function tapThrough(key, clientX, clientY) {
         rescanNow();
         refresh(key);
     }, 60);
+}
+
+// Обработчики чужих кнопок часто зовут setPointerCapture(e.pointerId) на pointerdown.
+// Для синтетического указателя браузер бросает NotFoundError, и обработчик обрывается
+// на середине. На время пересылки захват для НАШЕГО pointerId делаем безопасным
+// пустышкой; настоящие указатели идут в исходные методы.
+function withSyntheticPointerCapture(fn) {
+    const proto = Element.prototype;
+    const original = {
+        set: proto.setPointerCapture,
+        release: proto.releasePointerCapture,
+        has: proto.hasPointerCapture,
+    };
+    const captured = new Set();
+    proto.setPointerCapture = function (id) {
+        if (id !== SYNTH_POINTER_ID) return original.set.call(this, id);
+        captured.add(this);
+        return undefined;
+    };
+    proto.releasePointerCapture = function (id) {
+        if (id !== SYNTH_POINTER_ID) return original.release.call(this, id);
+        captured.delete(this);
+        return undefined;
+    };
+    proto.hasPointerCapture = function (id) {
+        if (id !== SYNTH_POINTER_ID) return original.has.call(this, id);
+        return captured.has(this);
+    };
+    try {
+        return fn();
+    } finally {
+        proto.setPointerCapture = original.set;
+        proto.releasePointerCapture = original.release;
+        proto.hasPointerCapture = original.has;
+    }
+}
+
+// Пересылка — после того, как настоящий клик по копии полностью отработал (всплыл до
+// document). Иначе обработчики «клик мимо — закрыть» у расширения увидят этот клик уже
+// после открытия его окна и тут же закроют его: цель клика — наша ячейка, «мимо».
+function deferTap(key, x, y, onTap) {
+    setTimeout(() => {
+        tapThrough(key, x, y);
+        onTap?.(key);
+    }, 0);
 }
 
 // --- Ячейки ---
@@ -180,15 +275,13 @@ export function ensureProxy(button, parent, onTap) {
 
         cell.addEventListener('click', (e) => {
             if (cell.classList.contains('stf-arrangeable')) return;
-            tapThrough(button.key, e.clientX, e.clientY);
-            onTap?.(button.key);
+            deferTap(button.key, e.clientX, e.clientY, onTap);
         });
         cell.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter' && e.key !== ' ') return;
             e.preventDefault();
             const r = cell.getBoundingClientRect();
-            tapThrough(button.key, r.left + r.width / 2, r.top + r.height / 2);
-            onTap?.(button.key);
+            deferTap(button.key, r.left + r.width / 2, r.top + r.height / 2, onTap);
         });
 
         const observer = new MutationObserver(() => scheduleRefresh(button.key));
@@ -204,6 +297,10 @@ export function activateProxies() {
     for (const [key, p] of proxies) {
         refresh(key);
         p.observer.observe(p.el, { subtree: true, childList: true, characterData: true, attributes: true });
+        clearInterval(p.canvasTimer);
+        if (p.el.matches('canvas') || p.el.querySelector('canvas')) {
+            p.canvasTimer = setInterval(() => refresh(key), CANVAS_REFRESH_MS);
+        }
     }
 }
 
@@ -212,6 +309,7 @@ export function deactivateProxies() {
     for (const p of proxies.values()) {
         p.observer.disconnect();
         clearTimeout(p.timer);
+        clearInterval(p.canvasTimer);
     }
 }
 
@@ -220,6 +318,7 @@ export function disposeProxy(key) {
     if (!p) return;
     p.observer.disconnect();
     clearTimeout(p.timer);
+    clearInterval(p.canvasTimer);
     withoutObserving(() => p.cell.remove());
     proxies.delete(key);
 }
